@@ -118,6 +118,8 @@ class JSONRPC:
 			writer(json.dumps(e.args[0]).encode('utf8'))
 		except (JSONRPCExit, JSONRPCShutdown) as e:
 			raise e
+		except Exception as e:
+			raise Error(-1, f"{e.args[0]}")
 
 	def default(self, f: Callable[['JSONRPC', str, dict, str | int], JSONRPCResult | None] | None):
 		if f is None:
