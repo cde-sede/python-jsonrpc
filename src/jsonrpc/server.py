@@ -1,4 +1,5 @@
-from typing import TypedDict, NotRequired, Literal, Any
+from typing import TypedDict, NotRequired, Literal, Any, Optional
+from collections.abc import Callable
 from queue import Queue
 from functools import partial
 
@@ -30,11 +31,22 @@ class SocketServer:
 
 		self.jrpc = JSONRPC(BaseDispatcher())
 		self.queues: dict[socket.socket, Queue] = {}
-		
+		self._cleanup = None
+		self.msg: dict[socket.socket, str] = {}
+
+
+	def cleanup(self, f):
+		self._cleanup = f
+		return f
+
+	def __cleanup(self):
+		if self._cleanup:
+			self._cleanup(self)
+
 	def callback(self, b: bytes, *, socket: socket.socket):
 		self.queues[socket].put(b)
 
-	def loop(self):
+	def loop(self) -> bool:
 		r, w, e = select.select([self.socket, *self.connections], self.connections, [])
 
 		for s in r:
@@ -42,25 +54,48 @@ class SocketServer:
 				client, address = self.socket.accept()
 				self.connections.append(client)
 				self.queues[client] = Queue()
+				self.msg[client] = ''
 			else:
 				msg = s.recv(MAX_MSG_LEN).decode()
 				if not msg:
 					self.connections.remove(s)
 					continue
-				length, _, body = self.jrpc.parse_header(msg)
-				try:
-					self.jrpc.handler(body, partial(self.callback, socket=s))
-				except (JSONRPCExit, JSONRPCShutdown) as e:
-					raise e
+				self.msg[s] += msg
+
+				bodies = []
+				while True:
+					pairs, body = self.jrpc.parse_header(self.msg[s])
+					if not pairs:
+						break
+					if not pairs.get('Content-Length'):
+						break
+					length = int(pairs['Content-Length'])
+					if length <= len(body):
+						body, self.msg[s] = body[:length], body[length:]
+						bodies.append(body)
+					else:
+						break
+
+				if not bodies:
+					continue
+
+				for body in bodies:
+					try:
+						self.jrpc.handler(body, partial(self.callback, socket=s))
+					except (JSONRPCExit, JSONRPCShutdown) as e:
+						self.__cleanup()
+						return False
 
 		for s in w:
 			if s not in self.connections:
 				del self.queues[s]
+				del self.msg[s]
 				continue
 			if self.queues[s].empty(): continue
 
 			data = self.queues[s].get()
 			s.send(data)
+		return True
 
 	def __enter__(self):
 		return self

@@ -6,8 +6,8 @@ from .endpoints import (
 	Error,
 	CustomError,
 
-	JSONRPCShutdown,
-	JSONRPCExit,
+	Shutdown,
+	Exit,
 )
 
 from .client import (

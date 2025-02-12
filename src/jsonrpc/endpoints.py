@@ -2,6 +2,7 @@ from typing import Callable, Protocol, TypeAlias, NamedTuple, Iterable, Type, An
 from dataclasses import field, dataclass
 from queue import Queue
 import json
+from io import StringIO
 
 
 JSON: TypeAlias = dict | list | int | str
@@ -14,14 +15,14 @@ class JSONRPCShutdown(JSONRPCResult): ...
 class JSONRPCExit(JSONRPCResult): ...
 
 
-def Error(code: int, message: str) -> JSONRPCError:
-	raise JSONRPCError({"jsonrpc": "2.0", "id": None, "error": {"code": code, "message": message}})
+def Error(code: int, message: str, id: str | int | None=None) -> JSONRPCError:
+	raise JSONRPCError({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
 
-def CustomError(obj: Any) -> JSONRPCError:
-	raise JSONRPCError({"jsonrpc": "2.0", "id": None, "error": obj})
+def CustomError(obj: Any, id: str | int | None=None) -> JSONRPCError:
+	raise JSONRPCError({"jsonrpc": "2.0", "id": id, "error": obj})
 
 def Success(id: str | int, result: JSON) -> JSONRPCSuccess:
-	raise JSONRPCSuccess({"jsonrpc": "2.0", "id": str(id), "result": result})
+	raise JSONRPCSuccess({"jsonrpc": "2.0", "id": id, "result": result})
 
 def Batch(batch: list[JSONRPCSuccess | JSONRPCError]) -> JSONRPCBatch:
 	raise JSONRPCBatch([i.args[0] for i in batch])
@@ -85,21 +86,26 @@ class JSONRPC:
 			case _:
 				raise Error(-32600, "Invalid Request")
 
-	def parse_header(self, header: str):
-		content_length = -1
-		content_type = "application/vscode-jsonrpc; charset=utf-8"
 
-		fields = header.split('\r\n')
-		it = iter(fields)
-		for field in it:
-			if not field:
+	def parse_header(self, payload: str):
+		data = StringIO(payload)
+		state = 0
+		pairs = {}
+
+		empty = False
+		for line in data:
+			line = line.strip('\r\n')
+			if not line and not empty:
+				empty = True
+			if not line and empty:
 				break
-			key, value = field.split(':')
-			if key == "Content-Length":
-				content_length = int(value.strip('\r\n'))
-			if key == "Content-Type":
-				content_type = value.strip('\r\n')
-		return content_length, content_type, next(it)
+			if len(line.split(':')) >= 2:
+				key, _, val = line.partition(':')
+				if not key or not val:
+					return {}, ''
+				pairs[key] = val.strip()
+		
+		return pairs, data.read()
 
 	def parse(self, msg: str):
 		try:
